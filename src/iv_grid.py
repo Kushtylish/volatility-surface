@@ -90,3 +90,42 @@ def compute_iv_grid(expiry, spot, r, side="calls", ticker=TICKER, price_col="mid
     })
     out = out.dropna(subset=["iv"])
     return out
+def combined_smile(expiry, spot, r, ticker=TICKER):
+    """
+    Build the full smile: puts for strikes below spot, calls for strikes above.
+    Near-the-money strikes use whichever side has tighter spread.
+    """
+    puts = compute_iv_grid(expiry, spot, r, side="puts", ticker=ticker)
+    calls = compute_iv_grid(expiry, spot, r, side="calls", ticker=ticker)
+
+    if puts.empty and calls.empty:
+        return pd.DataFrame()
+
+    # OTM puts below spot
+    puts_otm = puts[puts["strike"] < spot] if not puts.empty else pd.DataFrame()
+
+    # OTM calls above spot
+    calls_otm = calls[calls["strike"] > spot] if not calls.empty else pd.DataFrame()
+
+    # ATM: pick whichever side has smaller distance to spot
+    all_atm = []
+    if not puts.empty:
+        p = puts.iloc[(puts["strike"] - spot).abs().argsort()[:1]]
+        all_atm.append(p)
+    if not calls.empty:
+        c = calls.iloc[(calls["strike"] - spot).abs().argsort()[:1]]
+        all_atm.append(c)
+    atm = pd.concat(all_atm).drop_duplicates(subset=["strike"]) if all_atm else pd.DataFrame()
+
+    combined = pd.concat([puts_otm, atm, calls_otm]).drop_duplicates(subset=["strike"]).sort_values("strike")
+    return combined.reset_index(drop=True)
+def filter_smile(smile, iv_min=0.02, iv_max=1.5, max_rel_spread=0.5):
+    """
+    Drop extreme IVs and wide-spread quotes that pollute the surface.
+    """
+    s = smile.copy()
+    s = s[(s["iv"] >= iv_min) & (s["iv"] <= iv_max)]
+    return s.reset_index(drop=True)
+def filter_by_price(smile, min_price=0.05):
+    """Drop strikes whose mid price is too small to trust (tick-size noise)."""
+    return smile[smile["price"] >= min_price].reset_index(drop=True)
